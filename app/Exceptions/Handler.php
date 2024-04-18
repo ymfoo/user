@@ -4,91 +4,93 @@ namespace App\Exceptions;
 
 use Exception;
 use Illuminate\Auth\AuthenticationException;
-use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Foundation\Exceptions\Handler as ExceptionHandler;
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use Symfony\Component\HttpFoundation\Response;
 
-class Handler extends Exception
+class Handler extends ExceptionHandler
 {
     /**
-     * Report the exception.
-     */
-    public function report(): void
-    {
-        // ...
-    }
-
-    /**
-     * Render the exception into an HTTP response.
+     * Render an exception into an HTTP response.
+     *
+     * @param  Request  $request
+     * @param  Exception  $exception
+     * @return Response
      */
     public function render($request, Exception $exception)
     {
-        if ($request->wantsJson()) {   //add Accept: application/json in request
-            return $this->handleApiException($request, $exception);
-        } else {
-            $retval = parent::render($request, $exception);
+        if ($request->wantsJson()) {
+            return $this->handleApiException($exception);
         }
 
-        return $retval;
+        return parent::render($request, $exception);
     }
 
-    private function handleApiException($request, Exception $exception)
+    /**
+     * Handle an API exception.
+     *
+     * @param  Exception  $exception
+     * @return JsonResponse
+     */
+    private function handleApiException(Exception $exception): JsonResponse
     {
-        $exception = $this->prepareException($exception);
-
-        if ($exception instanceof HttpResponseException) {
-            $exception = $exception->getResponse();
-        }
-
-        if ($exception instanceof AuthenticationException) {
-            $exception = $this->unauthenticated($request, $exception);
-        }
-
-        if ($exception instanceof ValidationException) {
-            $exception = $this->convertValidationExceptionToResponse($exception, $request);
-        }
-
-        return $this->customApiResponse($exception);
-    }
-
-    private function customApiResponse($exception)
-    {
-        if (method_exists($exception, 'getStatusCode')) {
-            $statusCode = $exception->getStatusCode();
-        } else {
-            $statusCode = 500;
-        }
-
-        $response = [];
-
-        switch ($statusCode) {
-            case 401:
-                $response['message'] = 'Unauthorized';
-                break;
-            case 403:
-                $response['message'] = 'Forbidden';
-                break;
-            case 404:
-                $response['message'] = 'Not Found';
-                break;
-            case 405:
-                $response['message'] = 'Method Not Allowed';
-                break;
-            case 422:
-                $response['message'] = $exception->original['message'];
-                $response['errors'] = $exception->original['errors'];
-                break;
-            default:
-                $response['message'] = ($statusCode == 500) ? 'Whoops, looks like something went wrong' : $exception->getMessage();
-                break;
-        }
+        $statusCode = $this->getStatusCode($exception);
+        $response = [
+            'message' => $this->getMessage($statusCode, $exception),
+            'status' => $statusCode,
+        ];
 
         if (config('app.debug')) {
             $response['trace'] = $exception->getTrace();
             $response['code'] = $exception->getCode();
         }
 
-        $response['status'] = $statusCode;
-
         return response()->json($response, $statusCode);
+    }
+
+    /**
+     * Get the status code of the exception.
+     *
+     * @param  Exception  $exception
+     * @return int
+     */
+    private function getStatusCode(Exception $exception): int
+    {
+        if ($exception instanceof AuthenticationException) {
+            return 401;
+        }
+
+        if ($exception instanceof ValidationException) {
+            return 400;
+        }
+
+        return $exception->getStatusCode() ?: 500;
+    }
+
+    /**
+     * Get the message for the given status code and exception.
+     *
+     * @param  int  $statusCode
+     * @param  Exception  $exception
+     * @return string
+     */
+    private function getMessage(int $statusCode, Exception $exception): string
+    {
+        switch ($statusCode) {
+            case 401:
+                return 'Unauthorized';
+            case 403:
+                return 'Forbidden';
+            case 404:
+                return 'Not Found';
+            case 405:
+                return 'Method Not Allowed';
+            case 422:
+                return $exception->getMessage() ?: 'Unprocessable Entity';
+            default:
+                return ($statusCode == 500) ? 'Whoops, looks like something went wrong' : $exception->getMessage();
+        }
     }
 }
